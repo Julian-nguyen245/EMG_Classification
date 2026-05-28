@@ -1,0 +1,21 @@
+# 1. Bỏ qua Dữ liệu và Weights (QUAN TRỌNG NHẤT)
+data/raw/*
+data/processed/*
+!data/.gitkeep         # Giữ lại cấu trúc thư mục rỗng
+weights/*
+!weights/.gitkeep
+
+# 2. Bỏ qua Môi trường ảo (Virtual Environments)
+venv/
+env/
+.env
+.venv/
+
+# 3. Bỏ qua file rác của Python và Jupyter
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# 4. Bỏ qua rác của Hệ điều hành
+.DS_Store
+Thumbs.db
