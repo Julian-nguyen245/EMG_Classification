@@ -1,9 +1,31 @@
 # 1. Bỏ qua Dữ liệu và Weights (QUAN TRỌNG NHẤT)
+# --- Thư mục data theo quy ước (nếu dùng sau này) ---
 data/raw/*
 data/processed/*
 !data/.gitkeep         # Giữ lại cấu trúc thư mục rỗng
 weights/*
 !weights/.gitkeep
+
+# --- Thư mục Data thực tế của dự án này ---
+Data (Ninapro)/raw/**
+Data (Ninapro)/processed/**
+!Data (Ninapro)/raw/.gitkeep
+!Data (Ninapro)/processed/.gitkeep
+
+# --- Ignore theo phần mở rộng file data lớn (phòng hờ) ---
+*.mat
+*.csv
+*.npy
+*.npz
+*.pkl
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.ckpt
+
+# --- Papers (PDF thường nặng) ---
+Papers/
 
 # 2. Bỏ qua Môi trường ảo (Virtual Environments)
 venv/
@@ -19,3 +41,13 @@ __pycache__/
 # 4. Bỏ qua rác của Hệ điều hành
 .DS_Store
 Thumbs.db
+
+# 5. Bỏ qua output/artifacts sinh ra khi chạy
+*.png
+*.jpg
+*.jpeg
+*.svg
+outputs/
+results/
+logs/
+runs/
