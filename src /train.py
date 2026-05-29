@@ -4,131 +4,183 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import numpy as np
+from sklearn.utils.class_weight import compute_class_weight
 from losses import GestureLoss
 
 # Import các class chúng ta vừa viết
 from dataset import sEMGDataset
 from model import GestureLSTM
-from data_utils import create_sliding_windows
+from ninapro_loader import load_and_split_ninapro_csv
 
 def train_model():
     # 1. CẤU HÌNH THÔNG SỐ (Hyperparameters)
     # ---------------------------------------------------------
-    EPOCHS = 20
-    BATCH_SIZE = 64
-    LEARNING_RATE = 0.001
-    WINDOW_SIZE = 40
-    STEP_SIZE = 20
-    NUM_CLASSES = 5
-    
+    EPOCHS         = 50
+    BATCH_SIZE     = 64
+    LEARNING_RATE  = 0.001
+    WINDOW_SIZE    = 40
+    STEP_SIZE      = 20
+    NUM_CLASSES    = 13   # 0=REST, 1-12=12 cử chỉ
+    HIDDEN_SIZE    = 128  # Tăng từ 64 lên 128
+    PATIENCE       = 10   # Early stopping: dừng nếu val_loss không giảm sau 10 epoch
+
+    WEIGHTS_DIR  = '/home/ju1ian/Documents/EMG Classification/src/weights'
+    WEIGHTS_PATH = os.path.join(WEIGHTS_DIR, 'best_lstm.pth')
+
     # Kiểm tra GPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🚀 Đang sử dụng thiết bị: {device}")
 
-    # 2. CHUẨN BỊ DỮ LIỆU (Giả lập để test pipeline)
+    # 2. CHUẨN BỊ DỮ LIỆU
     # ---------------------------------------------------------
     print("⏳ Đang chuẩn bị dữ liệu...")
-    # TODO: Thay thế đoạn này bằng code đọc file .mat thực tế của bạn
-    # Ví dụ: X_raw, y_raw = load_ninapro_data('data/raw/S1_A1_E1.mat')
-    X_raw_train = np.random.rand(8000, 10)  # 8000 mẫu (~80 giây)
-    y_raw_train = np.random.randint(0, NUM_CLASSES, size=(8000,))
-    
-    X_raw_val = np.random.rand(2000, 10)    # 2000 mẫu (~20 giây)
-    y_raw_val = np.random.randint(0, NUM_CLASSES, size=(2000,))
+    file_path = '/home/ju1ian/Documents/EMG Classification/Data (Ninapro)/processed/ninapro_db1_ready.csv'
 
-    # Cắt cửa sổ trượt
-    X_train, y_train = create_sliding_windows(X_raw_train, y_raw_train, WINDOW_SIZE, STEP_SIZE)
-    X_val, y_val = create_sliding_windows(X_raw_val, y_raw_val, WINDOW_SIZE, STEP_SIZE)
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Không tìm thấy {file_path}!")
+
+    (X_train, y_train), (X_val, y_val), (X_test, y_test) = load_and_split_ninapro_csv(
+        file_path, WINDOW_SIZE, STEP_SIZE
+    )
 
     # Đưa vào Dataset & DataLoader
-    train_loader = DataLoader(sEMGDataset(X_train, y_train), batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(sEMGDataset(X_val, y_val), batch_size=BATCH_SIZE, shuffle=False)
-    print(f"✅ Dữ liệu Train: {len(X_train)} windows | Dữ liệu Val: {len(X_val)} windows")
+    train_loader = DataLoader(sEMGDataset(X_train, y_train), batch_size=BATCH_SIZE, shuffle=True,  num_workers=0, pin_memory=True)
+    val_loader   = DataLoader(sEMGDataset(X_val,   y_val),   batch_size=BATCH_SIZE, shuffle=False, num_workers=0, pin_memory=True)
+    print(f"✅ Train: {len(X_train)} windows | Val: {len(X_val)} windows | Test: {len(X_test)} windows")
 
-    # 3. KHỞI TẠO MÔ HÌNH, LOSS, OPTIMIZER
+    # 3. TÍNH CLASS WEIGHTS TỰ ĐỘNG (Xử lý mất cân bằng dữ liệu)
     # ---------------------------------------------------------
-    model = GestureLSTM(input_size=10, hidden_size=64, num_layers=2, num_classes=NUM_CLASSES).to(device)
-    
-    # CrossEntropyLoss: Hàm mất mát chuẩn cho phân loại đa lớp
-    criterion = GestureLoss(use_focal_loss=False)
-    
-    # Adam Optimizer: Thuật toán tối ưu trọng số hiệu quả nhất hiện nay
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    # Tính trọng số nghịch đảo tần suất cho từng class
+    unique_classes = np.unique(y_train)
+    raw_weights = compute_class_weight(
+        class_weight='balanced',
+        classes=unique_classes,
+        y=y_train
+    )
 
-    # Tạo thư mục lưu weights nếu chưa có
-    os.makedirs('../weights', exist_ok=True)
-    best_val_loss = float('inf')
+    # Đảm bảo weights có đủ NUM_CLASSES phần tử (nếu có class nào vắng mặt trong train)
+    class_weights = np.ones(NUM_CLASSES, dtype=np.float32)
+    for cls, w in zip(unique_classes, raw_weights):
+        class_weights[cls] = w
 
-    # 4. VÒNG LẶP HUẤN LUYỆN (TRAINING LOOP)
+    # Giới hạn weight tối đa để tránh gradient bùng nổ
+    class_weights = np.clip(class_weights, 0.2, 10.0)
+
+    print("\n📊 Class Weights (để cân bằng dữ liệu):")
+    for i, w in enumerate(class_weights):
+        label = "REST" if i == 0 else f"Cử chỉ {i}"
+        print(f"   Class {i:2d} ({label:10s}): {w:.3f}")
+
+    weight_tensor = torch.tensor(class_weights, dtype=torch.float32).to(device)
+
+    # 4. KHỞI TẠO MÔ HÌNH, LOSS, OPTIMIZER
     # ---------------------------------------------------------
-    print("🔥 Bắt đầu huấn luyện...\n")
+    model = GestureLSTM(
+        input_size=10,
+        hidden_size=HIDDEN_SIZE,
+        num_layers=2,
+        num_classes=NUM_CLASSES
+    ).to(device)
+
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"\n🧠 Model: GestureLSTM | Hidden: {HIDDEN_SIZE} | Params: {total_params:,}")
+
+    # Focal Loss + Class Weights: kép xử lý mất cân bằng
+    criterion = GestureLoss(use_focal_loss=True, class_weights=class_weights.tolist())
+    # Chuyển weight tensor trong criterion lên đúng device
+    criterion.ce_loss.weight = criterion.ce_loss.weight.to(device)
+
+    # Adam Optimizer
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+
+    # ReduceLROnPlateau: Giảm LR × 0.5 nếu val_loss không giảm sau 5 epoch
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5, verbose=True
+    )
+
+    # Tạo thư mục lưu weights
+    os.makedirs(WEIGHTS_DIR, exist_ok=True)
+
+    # 5. VÒNG LẶP HUẤN LUYỆN (TRAINING LOOP)
+    # ---------------------------------------------------------
+    print(f"\n🔥 Bắt đầu huấn luyện ({EPOCHS} epochs, early stopping patience={PATIENCE})...\n")
+
+    best_val_loss    = float('inf')
+    epochs_no_improve = 0
+
     for epoch in range(EPOCHS):
-        # --- PHÁT TRAIN ---
-        model.train() # Bật chế độ train (Kích hoạt Dropout)
-        train_loss = 0.0
+        # --- PHA TRAIN ---
+        model.train()
+        train_loss    = 0.0
         train_correct = 0
-        total_train = 0
+        total_train   = 0
 
         for inputs, labels in train_loader:
             inputs, labels = inputs.to(device), labels.to(device)
-
-            # Xóa gradient cũ
             optimizer.zero_grad()
-
-            # Chạy tiến (Forward pass)
             outputs = model(inputs)
-            loss = criterion(outputs, labels)
-
-            # Chạy lùi (Backward pass) & Cập nhật trọng số
+            loss    = criterion(outputs, labels)
             loss.backward()
+            # Gradient clipping: tránh gradient bùng nổ
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
-            # Thống kê
-            train_loss += loss.item() * inputs.size(0)
-            _, predicted = torch.max(outputs.data, 1) # Lấy class có xác suất cao nhất
-            total_train += labels.size(0)
+            train_loss    += loss.item() * inputs.size(0)
+            _, predicted   = torch.max(outputs.data, 1)
+            total_train   += labels.size(0)
             train_correct += (predicted == labels).sum().item()
 
         avg_train_loss = train_loss / total_train
-        train_acc = 100 * train_correct / total_train
+        train_acc      = 100 * train_correct / total_train
 
         # --- PHA VALIDATION ---
-        model.eval() # Bật chế độ đánh giá (Tắt Dropout)
-        val_loss = 0.0
+        model.eval()
+        val_loss    = 0.0
         val_correct = 0
-        total_val = 0
+        total_val   = 0
 
-        # Không tính gradient ở pha này để tiết kiệm RAM và tăng tốc
         with torch.no_grad():
             for inputs, labels in val_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
-                
                 outputs = model(inputs)
-                loss = criterion(outputs, labels)
+                loss    = criterion(outputs, labels)
 
-                val_loss += loss.item() * inputs.size(0)
+                val_loss    += loss.item() * inputs.size(0)
                 _, predicted = torch.max(outputs.data, 1)
-                total_val += labels.size(0)
+                total_val   += labels.size(0)
                 val_correct += (predicted == labels).sum().item()
 
         avg_val_loss = val_loss / total_val
-        val_acc = 100 * val_correct / total_val
+        val_acc      = 100 * val_correct / total_val
+        current_lr   = optimizer.param_groups[0]['lr']
 
-        # 5. CHECKPOINTING (Lưu model tốt nhất)
-        # ---------------------------------------------------------
+        # --- CHECKPOINTING ---
         saved_msg = ""
         if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            # Lưu lại trạng thái của mạng
-            torch.save(model.state_dict(), '../weights/best_lstm.pth')
-            saved_msg = "⭐ (Đã lưu mô hình tốt nhất)"
+            best_val_loss     = avg_val_loss
+            epochs_no_improve = 0
+            torch.save(model.state_dict(), WEIGHTS_PATH)
+            saved_msg = "⭐ Saved"
+        else:
+            epochs_no_improve += 1
 
-        # In kết quả mỗi epoch
-        print(f"Epoch [{epoch+1}/{EPOCHS}] "
-              f"Train Loss: {avg_train_loss:.4f}, Acc: {train_acc:.2f}% | "
-              f"Val Loss: {avg_val_loss:.4f}, Acc: {val_acc:.2f}% {saved_msg}")
+        # In kết quả
+        print(f"Epoch [{epoch+1:3d}/{EPOCHS}] "
+              f"Train Loss: {avg_train_loss:.4f}, Acc: {train_acc:.1f}% | "
+              f"Val Loss: {avg_val_loss:.4f}, Acc: {val_acc:.1f}% | "
+              f"LR: {current_lr:.6f} {saved_msg}")
 
-    print("\n🎉 Hoàn tất huấn luyện! Trọng số tốt nhất nằm ở 'weights/best_lstm.pth'")
+        # Cập nhật LR scheduler
+        scheduler.step(avg_val_loss)
+
+        # --- EARLY STOPPING ---
+        if epochs_no_improve >= PATIENCE:
+            print(f"\n⚠️  Early stopping! Val loss không cải thiện sau {PATIENCE} epoch liên tiếp.")
+            print(f"   Best val loss: {best_val_loss:.4f} (đã lưu tại epoch {epoch+1-PATIENCE})")
+            break
+
+    print(f"\n🎉 Hoàn tất! Trọng số tốt nhất: '{WEIGHTS_PATH}'")
+    print(f"   Best Val Loss: {best_val_loss:.4f}")
 
 if __name__ == "__main__":
     train_model()

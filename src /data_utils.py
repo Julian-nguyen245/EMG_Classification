@@ -30,8 +30,8 @@ def create_sliding_windows(emg_signals, labels, window_size=40, step_size=20):
         X.append(window)
         y.append(label)
 
-        return np.array(X), np.array(y)
-    
+    return np.array(X), np.array(y)
+
 
     # -------------------------------------------------------------------
 # Test thử hàm (Chỉ chạy khi file này được gọi trực tiếp)

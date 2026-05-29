@@ -2,13 +2,13 @@ import torch
 import torch.nn as nn
 
 class GestureLSTM(nn.Module):
-    def __init__(self, input_size=10, hidden_size=64, num_layers=2, num_classes=5, dropout=0.2):
+    def __init__(self, input_size=10, hidden_size=128, num_layers=2, num_classes=5, dropout=0.3):
         """
         Mô hình LSTM phân loại cử chỉ tay qua sEMG.
         
         Tham số:
         - input_size : Số lượng điện cực (channels). Ninapro DB1 là 10.
-        - hidden_size: Số lượng nơ-ron ẩn trong mỗi lớp LSTM (Sức mạnh biểu diễn).
+        - hidden_size: Số lượng nơ-ron ẩn trong mỗi lớp LSTM (128 để tăng sức biểu diễn).
         - num_layers : Số lớp LSTM chồng lên nhau (Deep LSTM).
         - num_classes: Số lượng cử chỉ cần dự đoán.
         - dropout    : Tỷ lệ ngắt kết nối nơ-ron ngẫu nhiên để chống Overfitting.
@@ -28,6 +28,12 @@ class GestureLSTM(nn.Module):
             dropout=dropout if num_layers > 1 else 0
         )
         
+        # Layer Normalization: ổn định gradient, giúp train ổn định hơn với data mất cân bằng
+        self.layer_norm = nn.LayerNorm(hidden_size)
+        
+        # Dropout tường minh trước FC để regularization tốt hơn
+        self.dropout = nn.Dropout(p=dropout)
+        
         # Lớp Fully Connected (Linear) để ánh xạ từ hidden_size ra số lượng classes
         self.fc = nn.Linear(hidden_size, num_classes)
 
@@ -37,12 +43,14 @@ class GestureLSTM(nn.Module):
         x có shape: (batch_size, seq_length, input_size) -> VD: (32, 40, 10)
         """
         # out lưu trữ đầu ra của tất cả các time-steps: (batch_size, seq_length, hidden_size)
-        # h_n, c_n là trạng thái ẩn và cell state cuối cùng
         out, (h_n, c_n) = self.lstm(x)
         
-        # CHÚ Ý: Chúng ta chỉ dùng thông tin ở bước thời gian cuối cùng (last time-step)
-        # out[:, -1, :] nghĩa là lấy tất cả batch, tại sequence index cuối cùng, lấy tất cả features
-        last_out = out[:, -1, :] 
+        # Chỉ dùng time-step cuối cùng
+        last_out = out[:, -1, :]
+        
+        # Chuẩn hoá và regularize trước khi phân loại
+        last_out = self.layer_norm(last_out)
+        last_out = self.dropout(last_out)
         
         # Đưa qua lớp Linear để ra điểm số (logits) của từng class
         logits = self.fc(last_out)
