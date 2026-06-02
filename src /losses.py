@@ -3,59 +3,62 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class GestureLoss(nn.Module):
-    def __init__(self, use_focal_loss=False, class_weights=None, gamma=2.0):
+    def __init__(self, use_focal_loss=False, class_weights=None, gamma=2.0, label_smoothing=0.1):
         """
         Quản lý các hàm Loss cho dự án sEMG.
-        
+
         Tham số:
-        - use_focal_loss: Nếu True, sẽ dùng Focal Loss (tốt cho data mất cân bằng).
-                          Nếu False, dùng CrossEntropyLoss mặc định.
-        - class_weights: List trọng số cho từng class. VD: [0.1, 1.0, 1.0, 1.0, 1.0] 
-                         (Phạt nhẹ class 0, phạt nặng class 1, 2, 3, 4)
-        - gamma: Tham số tập trung (focusing parameter) của Focal Loss.
-                 gamma=0 → tương đương CrossEntropy (baseline).
-                 gamma cao → tập trung mạnh vào mẫu khó dự đoán.
+        - use_focal_loss  : Nếu True, dùng Focal Loss. Nếu False, dùng CrossEntropyLoss.
+        - class_weights   : List trọng số cho từng class để cân bằng dữ liệu.
+        - gamma           : Focusing parameter của Focal Loss.
+                            gamma=0 → tương đương CrossEntropy.
+                            gamma cao → tập trung mạnh vào mẫu khó dự đoán.
+        - label_smoothing : Làm mềm nhãn, giảm overconfidence. 0.1 là giá trị khuyến nghị.
         """
         super(GestureLoss, self).__init__()
         self.use_focal_loss = use_focal_loss
         self.gamma = gamma
-        
-        # Chuyển list weights thành Tensor nếu có
+
         weight_tensor = None
         if class_weights is not None:
             weight_tensor = torch.tensor(class_weights, dtype=torch.float32)
-            
-        # Hàm mặc định
-        self.ce_loss = nn.CrossEntropyLoss(weight=weight_tensor)
+
+        # Lưu weight để dùng chung cho cả CE và Focal Loss path
+        self.register_buffer('weight', weight_tensor)
+
+        self.ce_loss = nn.CrossEntropyLoss(weight=weight_tensor, label_smoothing=label_smoothing)
 
     def forward(self, logits, targets):
         """
-        Tính toán sai số.
-        - logits: Đầu ra của mô hình (Batch_size, Num_classes)
-        - targets: Nhãn thực tế (Batch_size)
+        logits : (Batch_size, Num_classes)
+        targets: (Batch_size,)
         """
         if not self.use_focal_loss:
             return self.ce_loss(logits, targets)
-        else:
-            # Thuật toán Focal Loss (Tự động tập trung vào các mẫu khó dự đoán)
-            ce_loss = F.cross_entropy(logits, targets, reduction='none')
-            pt = torch.exp(-ce_loss) # Xác suất dự đoán đúng
-            focal_loss = ((1 - pt) ** self.gamma) * ce_loss
-            return focal_loss.mean()
+
+        # Focal Loss: áp dụng class_weights và label_smoothing từ self.ce_loss
+        # BUG FIX: truyền weight vào F.cross_entropy để class imbalance được xử lý đúng
+        weight = self.weight.to(logits.device) if self.weight is not None else None
+        ce_loss = F.cross_entropy(logits, targets, weight=weight, reduction='none',
+                                  label_smoothing=self.ce_loss.label_smoothing)
+        pt = torch.exp(-ce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        return focal_loss.mean()
+
 
 # -------------------------------------------------------------------
 # Unit Test
 if __name__ == "__main__":
-    # Giả lập đầu ra của model (32 mẫu, 5 class)
     dummy_logits = torch.randn(32, 5)
     dummy_targets = torch.randint(0, 5, (32,))
-    
-    # Test 1: Cross Entropy bình thường
-    criterion_normal = GestureLoss(use_focal_loss=False)
-    loss_normal = criterion_normal(dummy_logits, dummy_targets)
-    print(f"Cross Entropy Loss: {loss_normal.item():.4f}")
-    
-    # Test 2: Dùng Focal Loss (Nâng cao)
-    criterion_focal = GestureLoss(use_focal_loss=True)
-    loss_focal = criterion_focal(dummy_logits, dummy_targets)
-    print(f"Focal Loss        : {loss_focal.item():.4f}")
+
+    criterion_ce = GestureLoss(use_focal_loss=False)
+    print(f"Cross Entropy Loss : {criterion_ce(dummy_logits, dummy_targets).item():.4f}")
+
+    criterion_focal = GestureLoss(use_focal_loss=True, gamma=2.0)
+    print(f"Focal Loss (γ=2.0) : {criterion_focal(dummy_logits, dummy_targets).item():.4f}")
+
+    # Kiểm tra class weights được áp dụng đúng trong cả hai path
+    weights = [0.5, 1.0, 1.5, 1.0, 2.0]
+    criterion_weighted_focal = GestureLoss(use_focal_loss=True, class_weights=weights, gamma=2.0)
+    print(f"Weighted Focal Loss: {criterion_weighted_focal(dummy_logits, dummy_targets).item():.4f}")

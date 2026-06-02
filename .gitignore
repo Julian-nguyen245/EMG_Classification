@@ -1,53 +1,68 @@
-# 1. Bỏ qua Dữ liệu và Weights (QUAN TRỌNG NHẤT)
-# --- Thư mục data theo quy ước (nếu dùng sau này) ---
-data/raw/*
-data/processed/*
-!data/.gitkeep         # Giữ lại cấu trúc thư mục rỗng
-weights/*
-!weights/.gitkeep
+# ══════════════════════════════════════════════════════════════════════
+#  .gitignore — EMG Gesture Classification Project
+#  Chỉ track: code Python, C++, LaTeX, config, requirements
+# ══════════════════════════════════════════════════════════════════════
 
-# --- Thư mục Data thực tế của dự án này ---
-Data (Ninapro)/raw/**
-Data (Ninapro)/processed/**
-!Data (Ninapro)/raw/.gitkeep
+# ── Dữ liệu lớn và tài liệu PDF (không track) ────────────────────────
+Data (Ninapro)/raw/
+Data (Ninapro)/s4/
+Data (Ninapro)/processed/*.csv
 !Data (Ninapro)/processed/.gitkeep
 
-# --- Ignore theo phần mở rộng file data lớn (phòng hờ) ---
-*.mat
-*.csv
-*.npy
-*.npz
-*.pkl
-*.h5
-*.hdf5
-*.pt
-*.pth
-*.ckpt
-
-# --- Papers (PDF thường nặng) ---
+Books/
 Papers/
 
-# 2. Bỏ qua Môi trường ảo (Virtual Environments)
+dummy_sessions/
+emg_hoang/*.png
+emg_hoang/*.csv
+
+session_*.csv
+
+# ── Model weights & normalization stats ───────────────────────────────
+src/weights/*.pth
+src/weights/*.npz
+src /weights/*.pth
+src /weights/*.npz
+
+# ── Outputs (figures, JSON) ───────────────────────────────────────────
+outputs/
+outputs_dummy/
+
+# ── Python cache ──────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.mypy_cache/
+
+# ── Jupyter ───────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Virtual environments ──────────────────────────────────────────────
 venv/
 env/
 .env
 .venv/
+conda-env/
 
-# 3. Bỏ qua file rác của Python và Jupyter
-__pycache__/
-*.py[cod]
-.ipynb_checkpoints/
-
-# 4. Bỏ qua rác của Hệ điều hành
+# ── IDE / OS ──────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# 5. Bỏ qua output/artifacts sinh ra khi chạy
-*.png
-*.jpg
-*.jpeg
-*.svg
-outputs/
-results/
-logs/
-runs/
+# ── LaTeX / Written Book ──────────────────────────────────────────────
+Written_Book/
+
+# ── Misc ──────────────────────────────────────────────────────────────
+*.egg-info/
+dist/
+build/
+*.log
+run
+.sixth/
+.claude/
+CHANGES.md
