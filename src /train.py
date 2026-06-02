@@ -12,7 +12,17 @@ from dataset import sEMGDataset
 from model import GestureLSTM
 from ninapro_loader import load_and_split_ninapro_csv
 
-def train_model():
+def train_model(gamma=2.0, weights_suffix=""):
+    """
+    Huấn luyện model GestureLSTM với Focal Loss.
+    
+    Tham số:
+    - gamma: Focusing parameter cho Focal Loss (0.0 = CE baseline)
+    - weights_suffix: Hậu tố cho tên file weights (vd: "_gamma2.0")
+    
+    Returns:
+    - history: dict chứa {'train_loss', 'val_loss', 'train_acc', 'val_acc'} theo epoch
+    """
     # 1. CẤU HÌNH THÔNG SỐ (Hyperparameters)
     # ---------------------------------------------------------
     EPOCHS         = 50
@@ -25,7 +35,8 @@ def train_model():
     PATIENCE       = 10   # Early stopping: dừng nếu val_loss không giảm sau 10 epoch
 
     WEIGHTS_DIR  = '/home/ju1ian/Documents/EMG Classification/src/weights'
-    WEIGHTS_PATH = os.path.join(WEIGHTS_DIR, 'best_lstm.pth')
+    weights_name = f'best_lstm{weights_suffix}.pth'
+    WEIGHTS_PATH = os.path.join(WEIGHTS_DIR, weights_name)
 
     # Kiểm tra GPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -66,7 +77,7 @@ def train_model():
     # Giới hạn weight tối đa để tránh gradient bùng nổ
     class_weights = np.clip(class_weights, 0.2, 10.0)
 
-    print("\n📊 Class Weights (để cân bằng dữ liệu):")
+    print("\n Class Weights (để cân bằng dữ liệu):")
     for i, w in enumerate(class_weights):
         label = "REST" if i == 0 else f"Cử chỉ {i}"
         print(f"   Class {i:2d} ({label:10s}): {w:.3f}")
@@ -83,10 +94,10 @@ def train_model():
     ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"\n🧠 Model: GestureLSTM | Hidden: {HIDDEN_SIZE} | Params: {total_params:,}")
+    print(f"\n Model: GestureLSTM | Hidden: {HIDDEN_SIZE} | Params: {total_params:,}")
 
     # Focal Loss + Class Weights: kép xử lý mất cân bằng
-    criterion = GestureLoss(use_focal_loss=True, class_weights=class_weights.tolist())
+    criterion = GestureLoss(use_focal_loss=True, class_weights=class_weights.tolist(), gamma=gamma)
     # Chuyển weight tensor trong criterion lên đúng device
     criterion.ce_loss.weight = criterion.ce_loss.weight.to(device)
 
@@ -103,10 +114,18 @@ def train_model():
 
     # 5. VÒNG LẶP HUẤN LUYỆN (TRAINING LOOP)
     # ---------------------------------------------------------
-    print(f"\n🔥 Bắt đầu huấn luyện ({EPOCHS} epochs, early stopping patience={PATIENCE})...\n")
+    print(f"\n Bắt đầu huấn luyện ({EPOCHS} epochs, gamma={gamma}, early stopping patience={PATIENCE})...\n")
 
     best_val_loss    = float('inf')
     epochs_no_improve = 0
+
+    # Lưu history để plot sau
+    history = {
+        'train_loss': [],
+        'val_loss': [],
+        'train_acc': [],
+        'val_acc': []
+    }
 
     for epoch in range(EPOCHS):
         # --- PHA TRAIN ---
@@ -154,6 +173,12 @@ def train_model():
         val_acc      = 100 * val_correct / total_val
         current_lr   = optimizer.param_groups[0]['lr']
 
+        # Lưu history
+        history['train_loss'].append(avg_train_loss)
+        history['val_loss'].append(avg_val_loss)
+        history['train_acc'].append(train_acc)
+        history['val_acc'].append(val_acc)
+
         # --- CHECKPOINTING ---
         saved_msg = ""
         if avg_val_loss < best_val_loss:
@@ -175,12 +200,14 @@ def train_model():
 
         # --- EARLY STOPPING ---
         if epochs_no_improve >= PATIENCE:
-            print(f"\n⚠️  Early stopping! Val loss không cải thiện sau {PATIENCE} epoch liên tiếp.")
+            print(f"\n  Early stopping! Val loss không cải thiện sau {PATIENCE} epoch liên tiếp.")
             print(f"   Best val loss: {best_val_loss:.4f} (đã lưu tại epoch {epoch+1-PATIENCE})")
             break
 
-    print(f"\n🎉 Hoàn tất! Trọng số tốt nhất: '{WEIGHTS_PATH}'")
+    print(f"\n Hoàn tất! Trọng số tốt nhất: '{WEIGHTS_PATH}'")
     print(f"   Best Val Loss: {best_val_loss:.4f}")
+
+    return history
 
 if __name__ == "__main__":
     train_model()

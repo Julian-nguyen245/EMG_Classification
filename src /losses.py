@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class GestureLoss(nn.Module):
-    def __init__(self, use_focal_loss=False, class_weights=None):
+    def __init__(self, use_focal_loss=False, class_weights=None, gamma=2.0):
         """
         Quản lý các hàm Loss cho dự án sEMG.
         
@@ -12,9 +12,13 @@ class GestureLoss(nn.Module):
                           Nếu False, dùng CrossEntropyLoss mặc định.
         - class_weights: List trọng số cho từng class. VD: [0.1, 1.0, 1.0, 1.0, 1.0] 
                          (Phạt nhẹ class 0, phạt nặng class 1, 2, 3, 4)
+        - gamma: Tham số tập trung (focusing parameter) của Focal Loss.
+                 gamma=0 → tương đương CrossEntropy (baseline).
+                 gamma cao → tập trung mạnh vào mẫu khó dự đoán.
         """
         super(GestureLoss, self).__init__()
         self.use_focal_loss = use_focal_loss
+        self.gamma = gamma
         
         # Chuyển list weights thành Tensor nếu có
         weight_tensor = None
@@ -33,10 +37,10 @@ class GestureLoss(nn.Module):
         if not self.use_focal_loss:
             return self.ce_loss(logits, targets)
         else:
-            # Thuật toán Focal Loss cơ bản (Tự động tập trung vào các mẫu khó dự đoán)
+            # Thuật toán Focal Loss (Tự động tập trung vào các mẫu khó dự đoán)
             ce_loss = F.cross_entropy(logits, targets, reduction='none')
             pt = torch.exp(-ce_loss) # Xác suất dự đoán đúng
-            focal_loss = ((1 - pt) ** 2) * ce_loss
+            focal_loss = ((1 - pt) ** self.gamma) * ce_loss
             return focal_loss.mean()
 
 # -------------------------------------------------------------------
